@@ -66,15 +66,6 @@ class UsersOperations:
         else:
             print(f"Table '{Users.__tablename__}' already exists, skipping creation.")
 
-    async def get_user_data(self, telegram_id: int) -> dict:
-        async with self.async_session() as session:
-            async with session.begin():
-                query = select(Users).where(Users.telegram_id == telegram_id)
-                result = await session.execute(query)
-                user = result.scalar_one_or_none()
-                return user.__dict__ if user else {}
-
-
     async def get_all_users_data(self) -> Optional[pd.DataFrame]:
         async with self.async_session() as session:
             async with session.begin():
