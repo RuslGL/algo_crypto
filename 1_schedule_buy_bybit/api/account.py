@@ -1,23 +1,17 @@
 import asyncio
 import os
-import sys
 import time
 import hmac
 import hashlib
 import json
-from decimal import Decimal, ROUND_DOWN
-import traceback
-
 import aiohttp
-from dotenv import load_dotenv
 
-import settings as st
-# from bd.positions import PositionsOperations
-from bd.users import UsersOperations
+
+from dotenv import load_dotenv
+from settings import MAIN_URL, ENDPOINTS
 
 
 load_dotenv()
-
 DATABASE_URL = os.getenv('database_url')
 
 
@@ -56,46 +50,42 @@ async def post_bybit_signed(url, API_KEY, SECRET_KEY, **kwargs):
         data,
         headers)
 
+#
+# async def get_wallet_balance(api_key, secret_key, coin=None):
+#     user_op = UsersOperations(DATABASE_URL)
+#
+#     url = st.MAIN_URL + st.ENDPOINTS.get('wallet-balance')
+#
+#     if not api_key:
+#         return -1
+#     if not secret_key:
+#         return -1
+#
+#     timestamp = str(int(time.time() * 1000))
+#     headers = {
+#         'X-BAPI-API-KEY': api_key,
+#         'X-BAPI-TIMESTAMP': timestamp,
+#         'X-BAPI-RECV-WINDOW': '5000'
+#     }
+#     params = {'accountType': 'UNIFIED'}
+#     if coin:
+#         params['coin'] = coin
+#     headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
+#
+#     try:
+#         async with aiohttp.ClientSession() as session:
+#             async with session.get(url, headers=headers, params=params) as response:
+#                 data = await response.json()
+#         return data.get('result').get('list')[0].get('totalWalletBalance')
+#     except:
+#         return -1
 
-async def get_wallet_balance(api_key, secret_key, coin=None):
-    user_op = UsersOperations(DATABASE_URL)
-
-    url = st.MAIN_URL + st.ENDPOINTS.get('wallet-balance')
-
-    if not api_key:
-        return -1
-    if not secret_key:
-        return -1
-
-    timestamp = str(int(time.time() * 1000))
-    headers = {
-        'X-BAPI-API-KEY': api_key,
-        'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': '5000'
-    }
-    params = {'accountType': 'UNIFIED'}
-    if coin:
-        params['coin'] = coin
-    headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params) as response:
-                data = await response.json()
-        return data.get('result').get('list')[0].get('totalWalletBalance')
-    except:
-        return -1
 
 
+async def find_usdt_budget(api_key, secret_key):
 
-async def find_usdt_budget(telegram_id):
-    user_op = UsersOperations(DATABASE_URL)
 
-    settings = await user_op.get_user_data(telegram_id)
-    api_key = settings.get('demo_api_key')
-    secret_key = settings.get('demo_secret_key')
-
-    url = st.MAIN_URL + st.ENDPOINTS.get('wallet-balance')
+    url = MAIN_URL + ENDPOINTS.get('wallet-balance')
 
     if not api_key:
         return -1
@@ -121,48 +111,44 @@ async def find_usdt_budget(telegram_id):
         return -1
 
 
-# async def get_user_positions(settings, demo=None):
-#
-#
-#     api_key = settings.get('demo_api_key')
-#     secret_key = settings.get('demo_secret_key')
-#
-#     url = st.MAIN_URL + st.ENDPOINTS.get('open_positions')
-#
-#     if not api_key:
-#         return []
-#     if not secret_key:
-#         return []
-#
-#     timestamp = str(int(time.time() * 1000))
-#     headers = {
-#         'X-BAPI-API-KEY': api_key,
-#         'X-BAPI-TIMESTAMP': timestamp,
-#         'X-BAPI-RECV-WINDOW': '5000'
-#     }
-#
-#     params = {
-#         'category': 'linear',
-#         'settleCoin': 'USDT',
-#         'limit': 200,
-#
-#     }
-#
-#     headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
-#
-#     try:
-#         async with aiohttp.ClientSession() as session:
-#             async with session.get(url, headers=headers, params=params) as response:
-#                 data = await response.json()
-#         if data.get('retMsg') == 'OK':
-#             return data.get('result').get('list')
-#         if data.get('retMsg') == 'System error. Please try again later.':
-#             return -1
-#         else:
-#             return []
-#
-#     except Exception as e:
-#         return []
+async def get_user_positions(api_key, secret_key, symbol):
+    url = MAIN_URL + ENDPOINTS.get('open_positions')
+
+    if not api_key:
+        return -1
+    if not secret_key:
+        return -1
+
+    timestamp = str(int(time.time() * 1000))
+    headers = {
+        'X-BAPI-API-KEY': api_key,
+        'X-BAPI-TIMESTAMP': timestamp,
+        'X-BAPI-RECV-WINDOW': '5000'
+    }
+
+    params = {
+        'category': 'linear',
+        'symbol': symbol
+        # 'settleCoin': 'USDT',
+        # 'limit': 200,
+
+    }
+
+    headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                data = await response.json()
+        if data.get('retMsg') == 'OK':
+            return data.get('result').get('list')
+        if data.get('retMsg') == 'System error. Please try again later.':
+            return -1
+        else:
+            return -1
+
+    except Exception as e:
+        return -1
 
 
 # async def get_order_by_id(telegram_id, category, orderLinkId, demo=None, short=False):
@@ -253,16 +239,8 @@ async def find_usdt_budget(telegram_id):
 if __name__ == '__main__':
 
     async def main():
-        telegram_id = 666038149
-        user_op = UsersOperations(DATABASE_URL)
+        pass
 
-
-        # res = await find_usdt_budget(telegram_id)
-
-        users = await user_op.get_all_users_data()
-        for index, row in users.iterrows():
-            if row['telegram_id'] == telegram_id:
-                res = await get_wallet_balance(row['api_key'], row['secret_key'], coin=None)
 
 
     asyncio.run(main())
