@@ -1,91 +1,98 @@
-import uuid
+import os
 import asyncio
+from datetime import datetime, timedelta
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.date import DateTrigger
+from bd.schedule import ScheduleOperations
+from dotenv import load_dotenv
 
-from settings import MAIN_URL, ENDPOINTS
+load_dotenv()
 
-from api.account import find_usdt_budget, get_user_positions
+DATABASE_URL = os.getenv('database_url')
 
-from api.market import (get_linear_settings, get_linear_price,
-                        calculate_purchase_volume, round_price)
+async def before_task():
+    print(f"Before task executed at {datetime.now()}")
 
-from api.trade import (universal_linear_market_buy_order,
-                       universal_linear_limit_order, set_lev_linears)
+async def main_task():
+    print(f"Main task executed at {datetime.now()}")
 
+async def schedule_tasks(scheduler, schedule_data):
+    now = datetime.now()
+    current_day = now.isoweekday()
+    next_day = (current_day % 7) + 1  # Следующий день недели
 
-if __name__ == '__main__':
+    scheduler.remove_all_jobs()
+    # print("All previous tasks removed.")
 
-    import os
-    from dotenv import load_dotenv
+    # Проверяем, является ли schedule_data списком или словарём
+    if isinstance(schedule_data, dict):
+        schedule_data = [schedule_data]  # Преобразуем в список для унификации обработки
 
-    load_dotenv()
+    for schedule in schedule_data:
+        week_days = schedule["week_day"]
+        task_time = datetime.strptime(schedule["time"], "%H:%M:%S").time()
 
-    api_key = str(os.getenv('api_key'))
-    secret_key = str(os.getenv('secret_key'))
+        for day in week_days:
+            if day == current_day:
+                task_date = now.date()
+                task_datetime = datetime.combine(task_date, task_time)
 
-    url = MAIN_URL + ENDPOINTS['place_order']
+                # Проверяем, нужно ли планировать задачу на сегодня
+                if task_datetime <= now:
+                    continue  # Задача на сегодня уже прошла, пропускаем
 
-    symbol = 'BTCUSDT'
-    side = 'Sell'
+            elif day == next_day:
+                # Проверяем, нужно ли планировать задачу на следующий день
+                task_date = now.date() + timedelta(days=1)
+                task_datetime = datetime.combine(task_date, task_time)
 
+            else:
+                continue  # Пропускаем задачи для других дней
 
-    async def main():
-        pass
+            # меняем minutes=3 в зависимости от сложности предварнительного запроса и лимитов биржи
+            before_task_time = task_datetime - timedelta(minutes=3)
 
-        # # poluchaem nastroyki na torguemuyu paru
-        # BTCUSDT_settings = await get_linear_settings(symbol)
-        # print('\nНастройки торговли')
-        # print(BTCUSDT_settings)
-        #
-        # BTCUSDT_last_price = await get_linear_price(symbol)
-        # print('\nПоследняя цена')
-        # print(BTCUSDT_last_price)
-        #
-        # balance = float(await find_usdt_budget(api_key, secret_key))
-        # print('\nБаланс юзера')
-        # print(balance)
-        #
-        # qty = calculate_purchase_volume(balance * 0.995, BTCUSDT_last_price,
-        #                                 BTCUSDT_settings.get('min_order_qty'),
-        #                                 BTCUSDT_settings.get('qty_step'))
-        # print('\nКоличество к покупке')
-        # print(qty)
-        #
-        # # размещаем первичный ордер
-        # orderLinkId = uuid.uuid4().hex[:12]
-        # res = await universal_linear_market_buy_order(url, api_key, secret_key, symbol, qty, orderLinkId)
-        # print('\nРезультат размещения первичного ордера')
-        # print(res)
+            before_task_id = f"before_task_{day}_{task_time}"
+            main_task_id = f"main_task_{day}_{task_time}"
 
+            # Пропускаем задачи, если их время уже прошло
+            if before_task_time <= now and task_datetime <= now:
+                continue
 
-        # # если повторная закупка можем закрывать по средней цене?
-        # position_status = await get_user_positions(api_key, secret_key, symbol)
-        # print('\nПроверяем позицию')
-        # print(position_status)
-        #
-        # print('\nЦена входа в позицию')
-        # entry_price = position_status[0].get('avgPrice')
-        # print(entry_price)
-        #
-        # target_price = float(entry_price) * 1.05
-        # # Таргетный профит
-        # target_price = round_price(target_price, BTCUSDT_settings.get('price_tick_size'))
-        #
-        # print('\nТаргет цена')
-        # print(target_price)
+            # Добавляем задачи в планировщик
+            if before_task_time > now:
+                scheduler.add_job(
+                    before_task,
+                    DateTrigger(run_date=before_task_time),
+                    id=before_task_id,
+                    replace_existing=True,
+                )
+                print(f"Before task scheduled for {before_task_time}")
 
-
-        # orderLinkId = uuid.uuid4().hex[:12]
-        # res_two = await universal_linear_limit_order(url, api_key, secret_key,
-        #                                              symbol, side, qty,
-        #                                              target_price, orderLinkId)
-        #
-        # print('\nПроверяем результат размещения тейк ордера')
-        # print(res_two)
+            if task_datetime > now:
+                scheduler.add_job(
+                    main_task,
+                    DateTrigger(run_date=task_datetime),
+                    id=main_task_id,
+                    replace_existing=True,
+                )
+                print(f"Main task scheduled for {task_datetime}")
 
 
-        # leverage = 3
-        # set_lev = await set_lev_linears(api_key, secret_key, symbol, leverage)
-        # print(f'\nУстановили плечо {leverage}')
-        # print(set_lev)
+async def main():
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
+    schedule_op = ScheduleOperations(DATABASE_URL)
 
+    while True:
+        schedule = await schedule_op.get_schedule()
+
+        if schedule:
+            print(f"Current schedule: {schedule}")
+            await schedule_tasks(scheduler, schedule)
+
+        await asyncio.sleep(60)  # Проверяем расписание каждую минуту
+
+# Запуск
+if __name__ == "__main__":
     asyncio.run(main())
