@@ -5,6 +5,7 @@ from sqlalchemy import Column, String, Boolean, BigInteger, text, DateTime, func
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
+from sqlalchemy.dialects.postgresql import insert
 
 import pandas as pd
 from typing import Optional
@@ -81,15 +82,15 @@ class UsersOperations:
                     return df
                 return None
 
-    # async def upsert_user(self, user_data: dict):
-    #     async with self.async_session() as session:
-    #         async with session.begin():
-    #             stmt = insert(Users).values(user_data).on_conflict_do_update(
-    #                 index_elements=['telegram_id'],
-    #                 set_=user_data
-    #             )
-    #             await session.execute(stmt)
-    #         await session.commit()
+    async def upsert_user(self, user_data: dict):
+        async with self.async_session() as session:
+            async with session.begin():
+                stmt = insert(Users).values(user_data).on_conflict_do_update(
+                    index_elements=['telegram_id'],
+                    set_=user_data
+                )
+                await session.execute(stmt)
+            await session.commit()
 
 
     # async def delete_user(self, telegram_id: int):

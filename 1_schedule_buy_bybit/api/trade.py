@@ -104,8 +104,10 @@ async def universal_linear_limit_order(url, api_key, secret_key,
                                    )
 
 
-async def universal_linear_market_buy_order(url, api_key, secret_key, symbol, qty, orderLinkId):
-    return await post_bybit_signed(url, api_key, secret_key,
+async def universal_linear_market_buy_order(telegram_id, api_key, secret_key, symbol, qty, orderLinkId):
+
+    url = MAIN_URL + ENDPOINTS['place_order']
+    order = await post_bybit_signed(url, api_key, secret_key,
                                    orderType='Market',
                                    timeInForce='FOK',
                                    category='linear',
@@ -115,6 +117,7 @@ async def universal_linear_market_buy_order(url, api_key, secret_key, symbol, qt
                                    marketUnit='baseCoin',
                                    orderLinkId=orderLinkId
                                    )
+    return telegram_id, orderLinkId, order
 
 #               #####
 #            ############

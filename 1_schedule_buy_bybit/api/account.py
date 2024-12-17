@@ -82,15 +82,15 @@ async def post_bybit_signed(url, API_KEY, SECRET_KEY, **kwargs):
 
 
 
-async def find_usdt_budget(api_key, secret_key):
+async def find_usdt_budget(telegram_id, api_key, secret_key):
 
 
     url = MAIN_URL + ENDPOINTS.get('wallet-balance')
 
     if not api_key:
-        return -1
+        return telegram_id, -1
     if not secret_key:
-        return -1
+        return telegram_id, -1
 
     timestamp = str(int(time.time() * 1000))
     headers = {
@@ -106,12 +106,12 @@ async def find_usdt_budget(api_key, secret_key):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params=params) as response:
                 data = await response.json()
-        return data.get('result').get('list')[0].get('coin')[0].get('walletBalance')
+        return telegram_id, data  #.get('result').get('list')[0].get('coin')[0].get('walletBalance')
     except:
-        return -1
+        return telegram_id, -1
 
 
-async def get_user_positions(api_key, secret_key, symbol):
+async def get_user_positions(telegram_id, api_key, secret_key, symbol):
     url = MAIN_URL + ENDPOINTS.get('open_positions')
 
     if not api_key:
@@ -141,7 +141,7 @@ async def get_user_positions(api_key, secret_key, symbol):
             async with session.get(url, headers=headers, params=params) as response:
                 data = await response.json()
         if data.get('retMsg') == 'OK':
-            return data.get('result').get('list')
+            return telegram_id, data.get('result').get('list')
         if data.get('retMsg') == 'System error. Please try again later.':
             return -1
         else:
@@ -151,90 +151,60 @@ async def get_user_positions(api_key, secret_key, symbol):
         return -1
 
 
-# async def get_order_by_id(telegram_id, category, orderLinkId, demo=None, short=False):
-#
-#     user_op = UsersOperations(DATABASE_URL)
-#
-#     settings = await user_op.get_user_data(telegram_id)
-#
-#     if demo:
-#         api_key = settings.get('demo_api_key')
-#         secret_key = settings.get('demo_secret_key')
-#         # new
-#         url = st.demo_url + st.ENDPOINTS.get('open_orders')
-#     else:
-#         api_key = settings.get('main_api_key')
-#         secret_key = settings.get('main_secret_key')
-#         # new
-#         url = st.base_url + st.ENDPOINTS.get('open_orders')
-#
-#     if not api_key:
-#         return -1
-#     if not secret_key:
-#         return -1
-#
-#     timestamp = str(int(time.time() * 1000))
-#     headers = {
-#         'X-BAPI-API-KEY': api_key,
-#         'X-BAPI-TIMESTAMP': timestamp,
-#         'X-BAPI-RECV-WINDOW': '5000'
-#     }
-#
-#     params = {
-#         'category': category,
-#         'orderLinkId': orderLinkId,
-#
-#     }
-#     headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
-#
-#     try:
-#         async with aiohttp.ClientSession() as session:
-#             async with session.get(url, headers=headers, params=params) as response:
-#                 data = await response.json()
-#         row_data = data.get('result') #.get('list')[0]
-#         #return row_data
-#         if short:
-#             return data
-#         return [data.get('result').get('list')[0].get('orderStatus'), row_data]
-#
-#     except Exception as e:
-#         print(e)
-#         traceback.print_exc()
-#         return -1
-#
-#
-# async def cancel_order_by_orderLinkId(telegram_id, category, symbol, orderLinkId, demo=None):
-#     user_op = UsersOperations(DATABASE_URL)
-#     settings = await user_op.get_user_data(telegram_id)
-#     if demo:
-#         api_key = settings.get('demo_api_key')
-#         secret_key = settings.get('demo_secret_key')
-#         # new
-#         url = st.demo_url + st.ENDPOINTS.get('cancel_order')
-#     else:
-#         api_key = settings.get('main_api_key')
-#         secret_key = settings.get('main_secret_key')
-#         # new
-#         url = st.base_url + st.ENDPOINTS.get('cancel_order')
-#
-#     if not api_key:
-#         return -1
-#     if not secret_key:
-#         return -1
-#
-#     params = {
-#         'category': category,
-#         'orderLinkId': orderLinkId,
-#         'symbol': symbol,
-#
-#     }
-#     try:
-#         return await post_bybit_signed(url, api_key, secret_key, **params)
-#
-#     except Exception as e:
-#         print(e)
-#         traceback.print_exc()
-#         return -1
+async def get_order_by_id(telegram_id, api_key, secret_key, orderLinkId):
+    url = MAIN_URL + ENDPOINTS.get('open_orders')
+
+    timestamp = str(int(time.time() * 1000))
+    headers = {
+        'X-BAPI-API-KEY': api_key,
+        'X-BAPI-TIMESTAMP': timestamp,
+        'X-BAPI-RECV-WINDOW': '5000'
+    }
+
+    params = {
+        'category': 'linear',
+        'orderLinkId': orderLinkId,
+
+    }
+    headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                data = await response.json()
+        return telegram_id, orderLinkId, data    #  [data.get('result').get('list')[0].get('orderStatus'), row_data]
+
+    except Exception as e:
+        print(e)
+        return -1
+
+async def get_order_by_symbol(telegram_id, api_key, secret_key, symbol, orderLinkId):
+    url = MAIN_URL + ENDPOINTS.get('open_orders')
+
+    timestamp = str(int(time.time() * 1000))
+    headers = {
+        'X-BAPI-API-KEY': api_key,
+        'X-BAPI-TIMESTAMP': timestamp,
+        'X-BAPI-RECV-WINDOW': '5000'
+    }
+    params = {
+        'category': 'linear',
+        'symbol': symbol,
+        'openOnly': 0,
+
+    }
+    headers['X-BAPI-SIGN'] = gen_signature_get(params, timestamp, api_key, secret_key)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                data = await response.json()
+        return telegram_id, orderLinkId, data    #  [data.get('result').get('list')[0].get('orderStatus'), row_data]
+
+    except Exception as e:
+        print(e)
+        return -1
+
 
 if __name__ == '__main__':
 

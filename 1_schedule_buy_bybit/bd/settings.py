@@ -55,6 +55,7 @@ class SettingsOperations:
 
             if settings:
                 return {
+                    "name": 'trade_settings',
                     "stop_trading": settings.stop_trading,
                     "trading_pair": settings.trading_pair,
                     "razmer_posizii": settings.razmer_posizii,
