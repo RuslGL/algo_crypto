@@ -1,6 +1,7 @@
 import uuid
 import asyncio
 import os
+import traceback
 
 from datetime import datetime
 
@@ -17,7 +18,7 @@ from api.market import (get_linear_settings, get_linear_price,
                         calculate_purchase_volume, round_price)
 
 from api.trade import (universal_linear_market_buy_order,
-                       universal_linear_limit_order, set_lev_linears)
+                       universal_linear_limit_order, set_lev_linears, amend_linear_limit_order)
 
 
 
@@ -34,7 +35,18 @@ async def pre_task(settings_op, users_op):
     task_three = asyncio.create_task(settings_op.get_all_settings())  # получаем из БД наши настройки торговли
     task_four = asyncio.create_task(users_op.get_all_users_data())  # получаем из БД данные всех юзеров
     settings_tasks = [task_one, task_two, task_three, task_four]
-    results = await asyncio.gather(*settings_tasks)
+
+    try:
+        results = await asyncio.gather(*settings_tasks)
+    except Exception as e:
+        print(f"Ошибка в процессе получения первоначальных настроек: {e}")
+        traceback.print_exc()
+        try:
+            results = await asyncio.gather(*settings_tasks)
+        except Exception as e:
+            print(f"Ошибка в процессе повтороного получения первоначальных настроек: {e}")
+            traceback.print_exc()
+
 
     BTCUSDT = results[0]  # сетинги на биткоин
     ETHUSDT = results[1]  # сетинги на биткоин
@@ -48,23 +60,27 @@ async def pre_task(settings_op, users_op):
     budgets = {}
 
     for _, row in users.iterrows():
-        if row['stop_trading']:
-            continue  # пропускаем всех у кого статус стоп трейдинг
+        try:
+            if row['stop_trading']:
+                continue  # пропускаем всех у кого статус стоп трейдинг
 
-        # проверяем наличие в базе ключей по каждому юзеру
-        if row['api_key'] and row['secret_key']:
-            valid_users[row['telegram_id']] = (row['api_key'], row['secret_key'])
-            for_orders.append((row['telegram_id'], row['api_key'], row['secret_key']))
-        else:
-            problem_users.append((row['telegram_id'], 'stopped', 'NO API KEYS'))
+            # проверяем наличие в базе ключей по каждому юзеру
+            if row['api_key'] and row['secret_key']:
+                valid_users[row['telegram_id']] = (row['api_key'], row['secret_key'])
+                for_orders.append((row['telegram_id'], row['api_key'], row['secret_key']))
+            else:
+                problem_users.append((row['telegram_id'], 'stopped', 'NO API KEYS'))
 
-            # останавливаем торголю по тем, у кого нет ключей
-            await users_op.upsert_user(
-                {
-                    'telegram_id': row['telegram_id'],
-                    'stop_trading': True,
-                }
-            )
+                # останавливаем торголю по тем, у кого нет ключей
+                await users_op.upsert_user(
+                    {
+                        'telegram_id': row['telegram_id'],
+                        'stop_trading': True,
+                    }
+                )
+        except Exception as e:
+            print(f"Ошибка в процессе получения настроек отдельного юзера: {e}")
+            traceback.print_exc()
 
 
     # создаем и ассинхронно отправляем по всем юзерам запрос по бюджету
@@ -72,91 +88,112 @@ async def pre_task(settings_op, users_op):
     for element in for_orders:
         order_tasks.append(find_usdt_budget(element[0], element[1], element[2]))
 
-    order_results = await asyncio.gather(*order_tasks)
+    try:
+        order_results = await asyncio.gather(*order_tasks)
+    except Exception as e:
+        print(f"Ошибка в процессе получения бюджетов пользователей: {e}")
+        traceback.print_exc()
+        try:
+            order_results = await asyncio.gather(*order_tasks)
+        except Exception as e:
+            print(f"Ошибка в процессе повтороного получения бюджетов пользователей: {e}")
+            traceback.print_exc()
 
 
     for element in order_results:
-        if element[1] == None:
-            problem_users.append((element[0], 'stopped', 'API KEY invalid or expired'))
-            await users_op.upsert_user(
-                {
-                    'telegram_id': element[0],
-                    'stop_trading': True,
-                }
-            )
-            continue
-        if element[1].get('retMsg') == "Unmatched IP, please check your API key's bound IP addresses.":
-            problem_users.append((element[0], 'stopped', 'Unmatched IP in API KEY'))
-            await users_op.upsert_user(
-                {
-                    'telegram_id': element[0],
-                    'stop_trading': True,
-                }
-            )
-            continue
+        try:
+            if element[1] == None:
+                problem_users.append((element[0], 'stopped', 'API KEY invalid or expired'))
+                await users_op.upsert_user(
+                    {
+                        'telegram_id': element[0],
+                        'stop_trading': True,
+                    }
+                )
+                continue
+            if element[1].get('retMsg') == "Unmatched IP, please check your API key's bound IP addresses.":
+                problem_users.append((element[0], 'stopped', 'Unmatched IP in API KEY'))
+                await users_op.upsert_user(
+                    {
+                        'telegram_id': element[0],
+                        'stop_trading': True,
+                    }
+                )
+                continue
 
-        # формируем список бюджетов по все юзерам, по которым биржа отдала данные кошелька
-        if element[1].get('retMsg') == 'OK':
-            budgets[element[0]] = element[1].get('result').get('list')[0].get('coin')[0].get('walletBalance')
+            # формируем список бюджетов по все юзерам, по которым биржа отдала данные кошелька
+            if element[1].get('retMsg') == 'OK':
+                budgets[element[0]] = element[1].get('result').get('list')[0].get('coin')[0].get('walletBalance')
+        except Exception as e:
+            print(f"Ошибка в процессе обработки результатов запросов на получение бюджетов по отдельному юзеру: {e}")
+            traceback.print_exc()
 
 
     # выставляем плечи по сеттингам для всех валидных юзеров
     leverage_tasks = []
     for user, items in budgets.items():
-        user_set = valid_users.get(user)
-        leverage_tasks.append(set_lev_linears(
-            user_set[0], user_set[1],
-            general_settings.get('trading_pair'),
-            general_settings.get('leverage')))
+        try:
+            user_set = valid_users.get(user)
+            leverage_tasks.append(set_lev_linears(
+                user_set[0], user_set[1],
+                general_settings.get('trading_pair'),
+                general_settings.get('leverage')))
+        except Exception as e:
+            print(f"Ошибка в процессе подготовки ордеров для установки плечей по отдельному юзеру: {e}")
+            traceback.print_exc()
 
-    await asyncio.gather(*leverage_tasks)
-
-
+    try:
+        await asyncio.gather(*leverage_tasks)
+    except Exception as e:
+        print(f"Ошибка в процессе изменения плечей по пользователям: {e}")
+        traceback.print_exc()
+        try:
+            await asyncio.gather(*leverage_tasks)
+        except Exception as e:
+            print(f"Ошибка в процессе повторной попытки изменения плечей по пользователям: {e}")
+            traceback.print_exc()
 
     print('problem_users', problem_users)
-
     print('Время исполнения pre_task', datetime.now() - start)
 
-    return BTCUSDT, ETHUSDT, general_settings, valid_users, budgets
+    return BTCUSDT, ETHUSDT, general_settings, valid_users, budgets, problem_users
 
 
-if __name__ == '__main__':
-    BTCUSDT_settings = {'name': 'BTCUSDT', 'min_price': '0.10', 'max_price': '199999.80', 'price_tick_size': '0.10',
-                        'max_order_qty': '1190.000', 'min_order_qty': '0.001', 'qty_step': '0.001'}
+async def main_task(BTCUSDT_settings, ETHUSDT_settings, general_settings, valid_users, budgets):
 
-    ETHUSDT_settings = {'name': 'ETHUSDT', 'min_price': '0.01', 'max_price': '19999.98', 'price_tick_size': '0.01',
-                        'max_order_qty': '7240.00', 'min_order_qty': '0.01', 'qty_step': '0.01'}
+    start = datetime.now()
 
-    general_settings = {'name': 'trade_settings', 'stop_trading': True, 'trading_pair': 'BTCUSDT',
-                        'razmer_posizii': 25, 'leverage': 1, 'teyk_profit': 5}
+    trading_pair = general_settings.get('trading_pair')
 
-    valid_users = {666038149: ('Dxg3WyijHeLQteINGS', 'tgu2JDSf3ck5BAWRel4vVa0Pb4vmdgAN31Au')}
+    if trading_pair == 'BTCUSDT':
+        actual_settings = BTCUSDT_settings
+    elif trading_pair == 'ETHUSDT':
+        actual_settings = ETHUSDT_settings
+    else:
+        print('Report problem')
+        return
 
-    budgets = {666038149: '685.13909616'}
-
-
-    async def main_task(BTCUSDT_settings, ETHUSDT_settings, general_settings, valid_users, budgets):
-        start = datetime.now()
-
-        trading_pair = general_settings.get('trading_pair')
-
-        if trading_pair == 'BTCUSDT':
-            actual_settings = BTCUSDT_settings
-        elif trading_pair == 'ETHUSDT':
-            actual_settings = ETHUSDT_settings
-        else:
-            print('Report problem')
-            return
-
+    # получаем последние цены на бирже
+    try:
         last_price = await get_linear_price(trading_pair)
+    except Exception as e:
+        print(f"Ошибка в получения цен на пары: {e}")
+        traceback.print_exc()
+        try:
+            last_price = await get_linear_price(trading_pair)
+        except Exception as e:
+            print(f"Ошибка в попытке повторного получения цен на пары: {e}")
+            traceback.print_exc()
 
 
-        orders_tasks = []
-        for user, items in budgets.items():
+    # создаем таски на покупк для всех юзеров
+    orders_tasks = []
+    for user, items in budgets.items():
+        try:
             user_set = valid_users.get(user)
 
 
-            orderLinkId = uuid.uuid4().hex[:12]
+            orderLinkId = uuid.uuid4().hex[:34]
             balance = float(budgets.get(user))
             qty = calculate_purchase_volume(balance * 0.995, last_price,
                                             actual_settings.get('min_order_qty'),
@@ -167,27 +204,26 @@ if __name__ == '__main__':
 
             api_key = user_set[0]
             secret_key = user_set[1]
-            # print(
-            #     f'telegram_id {user}', '\n',
-            #     f'api_key {api_key}', '\n',
-            #     f'secret_key {secret_key}', '\n',
-            #     f'qty {qty}', '\n',
-            #     f'orderLinkId {orderLinkId}', '\n',
-            # )
+
             orders_tasks.append(
                 universal_linear_market_buy_order(user, api_key, secret_key, trading_pair, qty, orderLinkId))
+        except Exception as e:
+            print(f"Ошибка в подготовке ордера по отдельному юзеру: {e}")
+            traceback.print_exc()
 
-        orders_result = await asyncio.gather(*orders_tasks)
-        print('Время размещения первичных ордеров main_task', datetime.now() - start)
-        print(orders_result)
-        # not enough udget - leverago or removed [(666038149, '01af001fe5ad', {'retCode': 110007, 'retMsg': 'ab not enough for new order', 'result': {}, 'retExtInfo': {}, 'time': 1734443351934})]
-        # good response [(666038149, '40344f7b3769', {'retCode': 0, 'retMsg': 'OK', 'result': {'orderId': 'ea123021-ea84-4a37-9dc5-fa72eac814d4', 'orderLinkId': '40344f7b3769'}, 'retExtInfo': {}, 'time': 1734443396670})]
+    # ассинхронно пушим на биржу все ордера и получаем респонс от биржи
+    orders_result = await asyncio.gather(*orders_tasks)
+    print('Время размещения первичных ордеров main_task', datetime.now() - start)
+    # not enough udget - leverago or removed [(666038149, '01af001fe5ad', {'retCode': 110007, 'retMsg': 'ab not enough for new order', 'result': {}, 'retExtInfo': {}, 'time': 1734443351934})]
+    # good response [(666038149, '40344f7b3769', {'retCode': 0, 'retMsg': 'OK', 'result': {'orderId': 'ea123021-ea84-4a37-9dc5-fa72eac814d4', 'orderLinkId': '40344f7b3769'}, 'retExtInfo': {}, 'time': 1734443396670})]
 
 
-        open_positions = []
-        open_orders = []
+    open_positions = []
+    open_orders = []
 
-        for element in orders_result:
+    # по каждому валидному респонсу на ордера
+    for element in orders_result:
+        try:
             if element[2].get('retMsg') == 'OK':
                 print('get info and prepare orders')
                 user = element[0]
@@ -195,84 +231,111 @@ if __name__ == '__main__':
                 api_key = user_set[0]
                 secret_key = user_set[1]
 
-                # open_positions = await get_user_positions(user, api_key, secret_key, trading_pair)
-                # open_orders = await get_order_by_symbol(user, api_key, secret_key, trading_pair, element[1])
-
-                # print('open_positions', open_positions)
-                # print('open_orders', open_orders)
-                # print('open_orders_list', open_orders[2].get('result').get('list'))
-
+                # получаем открытые позиции по юзеру с валидным респонсом
                 open_positions.append(
                     get_user_positions(user, api_key, secret_key, trading_pair))
 
+                # получаем открытые ордера по символу, который только что купили для каждого юзера
                 open_orders.append(
                     get_order_by_symbol(user, api_key, secret_key, trading_pair, element[1]))
 
 
-                # position_status = await get_user_positions(api_key, secret_key, symbol)
-
+            # не хватает бюджета - причина либо неверное плечо (не хватает ликвидности), либо юзер изменил остаток
             elif element[2].get('retMsg') == 'ab not enough for new order':
                 print('report lack of budget due to leverages or usdt removal by user')
+        except Exception as e:
+            print(f"Ошибка в подготовке ордеров на получение инфо об открытых ордерах и позициях у отдельного юзера: {e}")
+            traceback.print_exc()
 
-        open_positions = await asyncio.gather(*open_positions)
+    # ассинхронно пушим на биржу одновеменно все ордера на получение открытых позиций, следующим шагом на получение всех открытых ордеров
 
+    open_positions = await asyncio.gather(*open_positions)
+    try:
         open_orders = await asyncio.gather(*open_orders)
+    except Exception as e:
+        print(f"Ошибка в получения информации об открытых ордерах: {e}")
+        traceback.print_exc()
 
-        print('open_positions', open_positions)
-        # good response open_positions [(666038149, [
-        # {'symbol': 'BTCUSDT', 'leverage': '1', 'autoAddMargin': 0, 'avgPrice': '107939.8', 'liqPrice': '539.7', 'riskLimitValue': '2000000',
-        # 'takeProfit': '', 'positionValue': '647.6388', 'isReduceOnly': False, 'tpslMode': 'Full', 'riskId': 1, 'trailingStop': '0',
-        # 'unrealisedPnl': '-0.0996', 'markPrice': '107923.2', 'adlRankIndicator': 2, 'cumRealisedPnl': '-38.52650837', 'positionMM': '3.238194',
-        # 'createdTime': '1723448982069', 'positionIdx': 0, 'positionIM': '647.6388', 'seq': 140592881581634, 'updatedTime': '1734446904612',
-        # 'side': 'Buy', 'bustPrice': '', 'positionBalance': '647.6388', 'leverageSysUpdatedTime': '', 'curRealisedPnl': '-0.35620134', 'size': '0.006',
-        # 'positionStatus': 'Normal', 'mmrSysUpdatedTime': '', 'stopLoss': '', 'tradeMode': 0, 'sessionAvgPrice': ''}])]
-
-        # no new positions = empty budget open_positions []
-
-        print('open_orders', open_orders)
-
-        # create new take order by avg position price
-        # empty open orders response open_orders [(666038149, 666038149,
-        # {'retCode': 0, 'retMsg': 'OK', 'result': {'nextPageCursor': '', 'category': 'linear', 'list': []},
-        # 'retExtInfo': {}, 'time': 1734446905726})]
-
-        # skip all
-        # no new positions = empty budget open_positions []
-
-        # order already exists - change it
+    # print('cancel for test')
+    # await asyncio.sleep(5)
+    # print('open_positions', open_positions)
+    # print('open_orders', open_orders)
 
 
+    target_per_cent = 1 + (general_settings.get('teyk_profit')/100)
+    print('target_per_cent', target_per_cent)
+    for index, position in enumerate(open_positions):
+        try:
+            user = position[0]
+            result_position = position[1]
+
+            close_price = None
+
+            user_orders = open_orders[index]
+            if user == user_orders[0]:
+
+                # может по позиции проверить? или по обоим?
+                if user_orders[2].get('retMsg') == 'OK':
+                    open_orders = user_orders[2].get('result').get('list')
+                    user_set = valid_users.get(user)
+                    api_key = user_set[0]
+                    secret_key = user_set[1]
+
+                    if not open_orders:
+                        print('price = AVG position price')
+                        print(position)
+                        entry_price = position[1][0].get('avgPrice')
+                        target_price = float(entry_price) * target_per_cent
+                        size = position[1][0].get('size')
+                        target_price = round_price(target_price, BTCUSDT_settings.get('price_tick_size'))
+                        print('TP target price', target_price)
+                        print('TP size', size)
+
+                        orderLinkId = uuid.uuid4().hex[:34]
+
+                        res_two = await universal_linear_limit_order(api_key, secret_key,
+                                                                     trading_pair, size,
+                                                                     target_price, orderLinkId)
+                        print('New order', res_two)
+
+                    else:
+                        print('Buy with last price')
+                        print('open_orders', open_orders[0])
+                        prev_order_orderLinkId = open_orders[0].get('orderLinkId')
+                        price = open_orders[0].get('price')
+
+                        if not price:
+                            print('Рассчитать заново')
+
+                        size = position[1][0].get('size')
+
+                        res_three = await amend_linear_limit_order(api_key, secret_key,
+                                                 trading_pair, size, prev_order_orderLinkId)
+                        print('res_three', res_three)
+                        if res_three.get('retMsg') == 'order not exists or too late to replace':
+                            print('order not exists or too late to replace')
+                            entry_price = position[1][0].get('avgPrice')
+                            target_price = float(entry_price) * target_per_cent
+                            size = position[1][0].get('size')
+                            target_price = round_price(target_price, BTCUSDT_settings.get('price_tick_size'))
+                            print('TP target price', target_price)
+                            print('TP size', size)
+
+                            orderLinkId = uuid.uuid4().hex[:34]
+
+                            res_four = await universal_linear_limit_order(api_key, secret_key,
+                                                                         trading_pair, size,
+                                                                         target_price, orderLinkId)
+                            print('New order, res four', res_four)
+            else:
+                print('error in users indexing')
+        except Exception as e:
+            print(f"Ошибка в установке ордеров на продажу по отдельному юзеру: {e}")
+            traceback.print_exc()
+    print('Время исполнения main_task', datetime.now() - start)
 
 
-        #
-        #
-        #
-        #     set_lev_linears(
-        #         user_set[0], user_set[1],
-        #         general_settings.get('trading_pair'),
-        #         general_settings.get('leverage')))
-        #
-        # await asyncio.gather(*leverage_tasks)
-
-        print('Время исполнения main_task', datetime.now() - start)
-        pass
-
-
-    #
-    #
-    #
-    # import os
-    # from dotenv import load_dotenv
-    #
-    # load_dotenv()
-    #
-    # api_key = str(os.getenv('api_key'))
-    # secret_key = str(os.getenv('secret_key'))
-    #
-    # url = MAIN_URL + ENDPOINTS['place_order']
-    #
-    # symbol = 'BTCUSDT'
-    # side = 'Sell'
+if __name__ == '__main__':
 
 
 
@@ -281,83 +344,9 @@ if __name__ == '__main__':
         settings_op = SettingsOperations(DATABASE_URL)
         users_op = UsersOperations(DATABASE_URL)
 
-
-        res = await pre_task(settings_op, users_op)
-        print(*res, sep='\n')
-
+        BTCUSDT_settings, ETHUSDT_settings, general_settings, valid_users, budgets, problem_users = await pre_task(settings_op,
+                                                                                                    users_op)
 
         await main_task(BTCUSDT_settings, ETHUSDT_settings, general_settings, valid_users, budgets)
-
-
-
-
-
-        # print(**settings)
-        # for element in settings:
-        #     print(element, '\n')
-
-
-
-
-
-        # # # poluchaem nastroyki na torguemuyu paru
-        # BTCUSDT_settings = await get_linear_settings(symbol)
-        # print('\nНастройки торговли')
-        # print(BTCUSDT_settings)
-        # #
-        # BTCUSDT_last_price = await get_linear_price(symbol)
-        # print('\nПоследняя цена')
-        # print(BTCUSDT_last_price)
-        # #
-        # balance = float(await find_usdt_budget(api_key, secret_key))
-        # print('\nБаланс юзера')
-        # print(balance)
-        # #
-        # qty = calculate_purchase_volume(balance * 0.995, BTCUSDT_last_price,
-        #                                 BTCUSDT_settings.get('min_order_qty'),
-        #                                 BTCUSDT_settings.get('qty_step'))
-        # print('\nКоличество к покупке')
-        # print(qty)
-        # #
-        # # размещаем первичный ордер
-        # orderLinkId = uuid.uuid4().hex[:12]
-        # res = await universal_linear_market_buy_order(url, api_key, secret_key, symbol, qty, orderLinkId)
-        # print('\nРезультат размещения первичного ордера')
-        # print(res)
-        #
-        #
-        # # # если повторная закупка можем закрывать по средней цене?
-        # position_status = await get_user_positions(api_key, secret_key, symbol)
-        # print('\nПроверяем позицию')
-        # print(position_status)
-        # #
-        # print('\nЦена входа в позицию')
-        # entry_price = position_status[0].get('avgPrice')
-        # print(entry_price)
-        # #
-        # target_price = float(entry_price) * 1.05
-        # # Таргетный профит
-        # target_price = round_price(target_price, BTCUSDT_settings.get('price_tick_size'))
-        #
-        # print('\nТаргет цена')
-        # print(target_price)
-        #
-        #
-        # orderLinkId = uuid.uuid4().hex[:12]
-        # print('prev order orderLinkId', orderLinkId)
-        # prev_order_orderLinkId = '052dfa997409'
-        #
-        # res_two = await universal_linear_limit_order(url, api_key, secret_key,
-        #                                              symbol, side, qty,
-        #                                              target_price, orderLinkId)
-        #
-        # print('\nПроверяем результат размещения тейк ордера')
-        # print(res_two)
-        #
-        #
-        # # leverage = 2
-        # # set_lev = await set_lev_linears(api_key, secret_key, symbol, leverage)
-        # # print(f'\nУстановили плечо {leverage}')
-        # # print(set_lev)
 
     asyncio.run(main())

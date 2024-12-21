@@ -87,14 +87,15 @@ async def universal_linear_conditional_limit_order(url, api_key, secret_key,
                                    triggerDirection=1
                                    )
 
+async def universal_linear_limit_order(api_key, secret_key,
+                                       symbol, qty, price, orderLinkId):
 
-async def universal_linear_limit_order(url, api_key, secret_key,
-                                       symbol, side, qty, price, orderLinkId):
+    url = MAIN_URL + ENDPOINTS['place_order']
     return await post_bybit_signed(url, api_key, secret_key,
                                    orderType='Limit',
                                    category='linear',
                                    symbol=symbol,
-                                   side=side,
+                                   side='Sell',
                                    qty=qty,
                                    price=price,
                                    marketUnit='baseCoin',
@@ -118,6 +119,18 @@ async def universal_linear_market_buy_order(telegram_id, api_key, secret_key, sy
                                    orderLinkId=orderLinkId
                                    )
     return telegram_id, orderLinkId, order
+
+
+async def amend_linear_limit_order(api_key, secret_key,
+                                              symbol, size, orderLinkId):
+    url = MAIN_URL + ENDPOINTS['amend_order']
+    return await post_bybit_signed(url, api_key, secret_key,
+                                   orderType='Limit',
+                                   category='linear',
+                                   symbol=symbol,
+                                   qty=size,
+                                   orderLinkId=orderLinkId
+                                   )
 
 #               #####
 #            ############
